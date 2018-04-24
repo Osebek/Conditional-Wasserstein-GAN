@@ -5,7 +5,7 @@ from keras.layers.merge import _Merge
 from keras.layers import Input,multiply, Dense, Reshape, Flatten, Dropout
 from keras.layers import BatchNormalization,Embedding, Activation, ZeroPadding2D
 from keras.layers.advanced_activations import LeakyReLU
-from keras.layers.convolutional import UpSampling2D, Conv2D
+from keras.layers.convolutional import UpSampling2D, Conv2D,Conv2DTranspose,Convolution2D
 from keras.models import Sequential, Model
 from keras.optimizers import RMSprop,Adam
 from functools import partial
@@ -24,20 +24,21 @@ class RandomWeightedAverage(_Merge):
 class ImprovedWGAN():
     def __init__(self):
 	self.GRADIENT_PENALTY_WEIGHT = 10
-        self.img_rows = 28
-        self.img_cols = 28
+        self.img_rows = 128 
+        self.img_cols = 128
         self.channels = 1
 	self.noise_shape = 100
-	self.num_classes = 10
+	self.num_classes = 11
         self.img_shape = (self.img_rows, self.img_cols, self.channels)
 	self.latent_dim = 100
         # Following parameter and optimizer set as recommended in paper
         self.n_critic = 5
-        optimizer = Adam(0.001, beta_1 = 0.5, beta_2=0.9) 
-
+        optimizer = Adam(0.0001, beta_1 = 0.5, beta_2=0.9) 
+	#optimizer = RMSprop(lr=0.00005)
+	#optimizer = RMSprop(lr=0.00005)
         # Build the generator and discriminator
-        self.generator = self.build_generator()
-        self.discriminator = self.build_discriminator()
+        self.generator = self.build_generator_exmpl()
+        self.discriminator = self.build_discriminator_exmpl()
 
         #-------------------------------
         # Construct Computational Graph
@@ -54,6 +55,7 @@ class ImprovedWGAN():
         label_critic = Input(shape=(1,))
 	# Generate image based of noise (fake sample)
         fake_img = self.generator([z_disc,label_critic])
+	print(fake_img.shape)
         # Discriminator determines validity of the real and fake images
         fake = self.discriminator([fake_img, label_critic])
         real = self.discriminator([real_img, label_critic]) # shadyyyy but I guess 
@@ -106,44 +108,45 @@ class ImprovedWGAN():
 	#gradient_l2_norm = K.sqrt(K.sum(K.square(gradients)))
 	#gradient_penalty = gradient_penalty_weight*K.square(1 - gradient_l2_norm)
 	#return K.mean(gradient_penalty)
-	print("burek")
 	gradients = K.gradients(y_pred,averaged_samples)[0]
 	gradients_sqr = K.square(gradients)
-	print(len(gradients_sqr.shape))
-	print(gradients_sqr)
-	gradients_sqr_sum = K.sum(gradients_sqr,axis=1)
-	print(gradients_sqr_sum.shape)
+	gradients_sqr_sum = K.sum(gradients_sqr,axis=0)
 	gradient_l2_norm = K.sqrt(gradients_sqr_sum)
 	gradient_penalty = gradient_penalty_weight * K.square(1- gradient_l2_norm)
-	print(gradient_penalty)
-	print(K.mean(gradient_penalty))
 	return K.mean(gradient_penalty)
 	
 
     def wasserstein_loss(self, y_true, y_pred):
         return K.mean(y_true * y_pred)
 
-    def build_generator(self):
 
-        noise_shape = (100,)
-	dim = 7
-        model = Sequential()
+    def build_generator_exmpl(self):
+	noise_shape = (100,)
+	dim = int(self.img_rows / 4) 
+	depth = 64
+	model = Sequential()
+	#model.add(Dense(depth,input_shape=noise_shape))
+	#model.add(Dropout(0.5))
+	#model.add(LeakyReLU())
+	model.add(Dense(depth*dim*dim,input_shape=noise_shape))
+	model.add(Dropout(0.5))
+	model.add(BatchNormalization())
+	model.add(LeakyReLU())
+	model.add(Reshape((dim,dim,depth)))
+	model.add(Conv2DTranspose(depth,(5,5),strides=2,padding='same'))
+	model.add(Dropout(0.5))
+	model.add(BatchNormalization(axis=-1))
+	model.add(LeakyReLU())
+	model.add(Convolution2D(int(depth/2),(5,5),padding='same'))
+	model.add(Dropout(0.5))
+	model.add(BatchNormalization(axis=-1))
+	model.add(LeakyReLU())
+	model.add(Conv2DTranspose(int(depth/2),(5,5),strides=2,padding='same'))
+	model.add(Dropout(0.5))
+	model.add(LeakyReLU())
+	model.add(Convolution2D(1,(5,5),padding='same',activation='tanh'))
 
-        model.add(Dense(128 * dim * dim, activation="relu", input_shape=noise_shape))
-        model.add(Reshape((dim, dim, 128)))
-        model.add(BatchNormalization(momentum=0.8))
-        model.add(UpSampling2D())
-        model.add(Conv2D(128, kernel_size=4, padding="same"))
-        model.add(Activation("relu"))
-        model.add(BatchNormalization(momentum=0.8))
-        model.add(UpSampling2D())
-        model.add(Conv2D(64, kernel_size=4, padding="same"))
-        model.add(Activation("relu"))
-        model.add(BatchNormalization(momentum=0.8))
-        model.add(Conv2D(self.channels, kernel_size=4, padding="same"))
-        model.add(Activation("tanh"))
-
-        model.summary()
+	model.summary()
 
         noise = Input(shape=noise_shape)
         label = Input(shape=(1,),dtype='int32')
@@ -157,27 +160,117 @@ class ImprovedWGAN():
 
 
 
+    def build_generator_dense(self):
+	model = Sequential()
+	model.add(Dense(128, input_dim=self.latent_dim))
+	model.add(LeakyReLU(alpha=0.2))
+	model.add(BatchNormalization(momentum=0.8))
+	model.add(Dense(256))
+	model.add(LeakyReLU(alpha=0.2))
+	model.add(BatchNormalization(momentum=0.8))
+	model.add(Dense(512))
+	model.add(LeakyReLU(alpha=0.2))
+	model.add(BatchNormalization(momentum=0.8))
+	model.add(Dense(np.prod(self.img_shape), activation='tanh'))
+	model.add(Reshape(self.img_shape))
+
+	model.summary()
+
+	noise = Input(shape=(self.latent_dim,))
+	label = Input(shape=(1,), dtype='int32')
+
+	label_embedding = Flatten()(Embedding(self.num_classes, self.latent_dim)(label))
+
+	model_input = multiply([noise, label_embedding])
+
+	img = model(model_input)
+
+	return Model([noise, label], img)
+
+
+    def build_discriminator_dense(self):
+	model = Sequential()	
+	model.add(Dense(128, input_dim=np.prod(self.img_shape)))
+	model.add(LeakyReLU(alpha=0.2))
+	model.add(Dense(128))
+	model.add(LeakyReLU(alpha=0.2))
+	model.add(Dropout(0.4))
+	model.add(Dense(128))
+	model.add(LeakyReLU(alpha=0.2))
+	model.add(Dropout(0.4))
+	model.add(Dense(1, activation='tanh'))
+	model.summary()
+
+	img = Input(shape=self.img_shape)
+	label = Input(shape=(1,), dtype='int32')
+
+	label_embedding = Flatten()(Embedding(self.num_classes, np.prod(self.img_shape))(label))
+	flat_img = Flatten()(img)
+
+	model_input = multiply([flat_img, label_embedding])
+
+	validity = model(model_input)
+
+	return Model([img, label], validity)
+
+    def build_generator(self):
+
+        noise_shape = (100,)
+	dim = 50
+        model = Sequential()
+	depth = 64
+        model.add(Dense(depth * dim * dim, activation="relu", input_shape=noise_shape))
+        model.add(Reshape((dim, dim, depth)))
+        model.add(BatchNormalization(momentum=0.8))
+        model.add(UpSampling2D())
+        model.add(Conv2D(depth, kernel_size=4, padding="same"))
+	model.add(Dropout(0.5))
+	model.add(Activation("relu"))
+        model.add(BatchNormalization(momentum=0.8))
+        model.add(UpSampling2D())
+        model.add(Conv2D(int(depth/2), kernel_size=4, padding="same"))
+	model.add(Dropout(0.5))
+	model.add(Activation("relu"))
+        model.add(BatchNormalization(momentum=0.8))
+        model.add(Conv2D(self.channels, kernel_size=4, padding="same"))
+        model.add(Dropout(0.5))
+	model.add(Activation("tanh"))
+
+        model.summary()
+
+        noise = Input(shape=noise_shape)
+        label = Input(shape=(1,),dtype='int32')
+
+	label_embedding = Flatten()(Embedding(self.num_classes,self.noise_shape)(label))
+	model_input = multiply([noise, label_embedding])
+	
+	img = model(model_input)
+	print(img.shape)
+        return Model([noise, label], img)
+
+
+
     def build_discriminator(self):
 
         img_shape = (self.img_rows, self.img_cols, self.channels)
 
         model = Sequential()
 	model.add(Reshape(img_shape,input_shape=(self.img_rows*self.img_cols*self.channels,) ))
-        model.add(Conv2D(16, kernel_size=3, strides=2,padding="same"))
-        model.add(LeakyReLU(alpha=0.2))
+        model.add(Conv2D(16, kernel_size=3, strides=2,padding="same")) 
         model.add(Dropout(0.4))
+	model.add(LeakyReLU(alpha=0.2))
         model.add(Conv2D(32, kernel_size=3, strides=2, padding="same"))
-        model.add(ZeroPadding2D(padding=((0,1),(0,1))))
-        model.add(LeakyReLU(alpha=0.2))
+        model.add(ZeroPadding2D(padding=((0,1),(0,1)))) 
         model.add(Dropout(0.4))
+	model.add(LeakyReLU(alpha=0.2))
         model.add(BatchNormalization(momentum=0.8))
         model.add(Conv2D(64, kernel_size=3, strides=2, padding="same"))
-        model.add(LeakyReLU(alpha=0.2))
         model.add(Dropout(0.4))
+	model.add(LeakyReLU(alpha=0.2))
         model.add(BatchNormalization(momentum=0.8))
-        model.add(Conv2D(128, kernel_size=3, strides=1, padding="same"))
-        model.add(LeakyReLU(alpha=0.2))
+        model.add(Conv2D(128, kernel_size=3, strides=1, padding="same")) 
         model.add(Dropout(0.4))
+	model.add(LeakyReLU(alpha=0.2))
 	model.add(Dense(1,activation="linear"))
         model.add(Flatten())
         model.summary()
@@ -193,19 +286,49 @@ class ImprovedWGAN():
         return Model([img, label], validity)
 
 
+    def build_discriminator_exmpl(self):
+	img_shape = (self.img_rows,self.img_cols,self.channels)
+	depth = 64
+	model = Sequential()
+	model.add(Reshape(img_shape,input_shape=(self.img_rows*self.img_cols*self.channels,)))
+	model.add(Convolution2D(int(depth/2),(5,5),padding='same'))
+	model.add(Dropout(0.6))
+	model.add(LeakyReLU())
+	model.add(Convolution2D(depth,(5,5),kernel_initializer='he_normal',strides=[2,2]))
+	model.add(Dropout(0.6))
+	model.add(LeakyReLU())
+	model.add(Convolution2D(depth,(5,5),kernel_initializer='he_normal',padding='same',strides=[2,2]))
+	model.add(Dropout(0.6))
+	model.add(LeakyReLU())
+	model.add(Flatten())
+	#model.add(Dense(depth,kernel_initializer='he_normal'))
+	#model.add(LeakyReLU())
+	model.add(Dense(1,kernel_initializer='he_normal'))
+	
+	img = Input(shape=img_shape)
+        label = Input(shape=(1,),dtype='int32')
+	
+	label_embedding = Flatten()(Embedding(self.num_classes,np.prod(self.img_shape))(label))
+	flat_img = Flatten()(img)
+
+	model_input = multiply([flat_img, label_embedding])
+	validity = model(model_input) 
+        return Model([img, label], validity)
+
+
 
     def train(self, epochs, batch_size, sample_interval=50):
 
         # Load the dataset
-        #(X_train, y_train) = read_utk_face('UTKFace/')
+        (X_train, y_train) = read_utk_face('UTKFace/',size=(self.img_rows,self.img_cols))
 
-	(X_train,y_train),(_,_) = mnist.load_data()
+	#(X_train,y_train),(_,_) = mnist.load_data()
 	#(X_train,y_train) = read_utk_face('UTKFace')
 	
         # Rescale -1 to 1
         X_train = (X_train.astype(np.float32) - 127.5) / 127.5
         X_train = np.expand_dims(X_train, axis=3)
-	#y_train = y_train.reshape(-1,1) if using read_utk_face data
+	y_train = y_train.reshape(-1,1) #if using read_utk_face data
         # Adversarial ground truths
         valid = -np.ones((batch_size, 1))
         fake =  np.ones((batch_size, 1))
@@ -243,9 +366,11 @@ class ImprovedWGAN():
 		
             # Sample generator input
             # Train the generator
-
-	    labels_train = y_train[idxs[4]]
-	    g_loss = self.generator_model.train_on_batch([noises[4],labels_train],[valid])
+            noise_gen = np.random.normal(0,1, (batch_size, 100))
+	
+	    #labels_train = y_train[idxs[4]]
+	    labels_train = np.random.randint(0,10,batch_size)  
+	    g_loss = self.generator_model.train_on_batch([noise_gen,labels_train],[valid])
 
 
             # Plot the progress
@@ -255,6 +380,8 @@ class ImprovedWGAN():
             # If at save interval => save generated image samples
             if epoch % sample_interval == 0:
                 self.sample_images(epoch)
+		self.discriminator_model.save_weights('discriminator_weights.h5')
+		self.generator_model.save_weights('generator_weights.h5')
 	    writer.add_summary(summary_d)
 	    writer.add_summary(summary_g)
 
@@ -279,4 +406,4 @@ class ImprovedWGAN():
 
 if __name__ == '__main__':
     wgan = ImprovedWGAN()
-    wgan.train(epochs=30000, batch_size=32, sample_interval=100)
+    wgan.train(epochs=10000, batch_size=32, sample_interval=100)
